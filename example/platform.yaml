@@ -1,0 +1,96 @@
+# Global platform configuration example.
+#
+# Copy this file to platform.yaml (or update your existing platform.yaml)
+# and adjust values for your host.
+
+# Linux bridge name used for container networking.
+BRIDGE: "lxcbr0"
+
+# Bridge IPv4 address + mask in CIDR format.
+IPV4_CIDR: "10.10.0.1/24"
+
+# IPv4 subnet used by containers.
+IPV4_NET: "10.10.0.0/24"
+
+# dnsmasq DHCP range for container addresses.
+DHCP_RANGE: "10.10.0.100,10.10.0.200,12h"
+
+# Enable or disable IPv6 logic globally: true/false.
+IPV6_ENABLED: "true"
+
+# Keep failed create resources for debugging: true/false.
+DEBUG_MODE: "false"
+
+# Host interface used for IPv6 proxy NDP operations.
+IPV6_DEV: "eth0"
+
+# IPv6 prefix source:
+# - "auto": derive from host interface
+# - explicit prefix or prefix CIDR (for example 240e:abcd:1234:5678::/64)
+IPV6_PREFIX: "auto"
+
+# Container IPv6 mask length (commonly 128 in this project).
+IPV6_MASK: "128"
+
+# Base install directory.
+PLATFORM_DIR: "/opt/lxc-platform"
+
+# Runtime directory for generated files and state.
+RUNTIME_DIR: "/opt/lxc-platform/runtime"
+
+# Directory for loopback rootfs image files.
+IMAGE_DIR: "/opt/lxc-platform/runtime/images"
+
+# Generated sniproxy configuration path.
+SNIPROXY_CONF: "/opt/lxc-platform/runtime/generated/sniproxy.conf"
+
+# sniproxy listening port.
+SNIPROXY_PORT: "443"
+
+# Base directory for sshpiper runtime data.
+SSHPIPER_BASE: "/opt/lxc-platform/runtime/sshpiper"
+
+# sshpiper route root directory.
+SSHPIPER_ROUTE_ROOT: "/opt/lxc-platform/runtime/sshpiper/data"
+
+# sshpiper listen address.
+SSHPIPER_ADDRESS: "0.0.0.0"
+
+# sshpiper listen port.
+SSHPIPER_PORT: "2222"
+
+# sshpiper release version.
+SSHPIPER_VERSION: "v1.5.3"
+
+# sshpiperd executable path.
+SSHPIPER_BIN: "/usr/local/bin/sshpiperd"
+
+# sshpiper host key path.
+SSHPIPER_HOSTKEY: "/opt/lxc-platform/runtime/sshpiper/data/hostkeys/ssh_host_ed25519_key"
+
+# sshpiper plugin directory.
+SSHPIPER_PLUGIN_DIR: "/opt/lxc-platform/runtime/sshpiper/plugins"
+
+# sshpiper workingdir plugin binary path.
+SSHPIPER_WORKINGDIR_PLUGIN: "/opt/lxc-platform/runtime/sshpiper/plugins/workingdir"
+
+# Default distro used when a user config omits DISTRO.
+DEFAULT_DISTRO: "alpine"
+
+# Default distro release used when a user config omits RELEASE.
+DEFAULT_RELEASE: "3.23"
+
+# Default architecture used when a user config omits ARCH.
+DEFAULT_ARCH: "amd64"
+
+# Directory containing per-user YAML configs.
+CONFIG_DIR: "/opt/lxc-platform/lxc.d"
+
+# Optional: force specific uplink interface for IPv4 NAT.
+# IPV4_DEV: "eth0"
+
+# Optional legacy alias; use IPV4_DEV first.
+# UPLINK_DEV: "eth0"
+
+# Optional: override container DNS servers (space/comma/semicolon separated).
+# DNS_SERVERS: "1.1.1.1,8.8.8.8"
