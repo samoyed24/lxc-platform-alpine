@@ -1,62 +1,62 @@
 # Per-user configuration example (Debian).
 #
 # Important:
-# 1) Rename this file to match your user id, for example USER_A.yaml.
-# 2) Keep key prefix in sync with file id: C_USER_A_...
+# 1) Rename this file to match your user id, for example user-a.yaml.
+# 2) Use plain lowercase keys (no C_<ID>_ prefix needed).
 
 # Container name under /var/lib/lxc.
-C_USER_A_NAME: "user-a"
+name: "user-a"
 
 # Route name used by sshpiper route directory.
-C_USER_A_ROUTE: "user-a"
+route: "user-a"
 
 # Backend key rotation trigger.
 # Change this value (for example v1 -> v2) and run apply to rotate host->container backend key.
-C_USER_A_BACKEND_KEY_VERSION: "v1"
+backend_key_version: "v1"
 
 # Desired state:
 # - true: container should exist/running (apply creates/starts)
 # - false: container should be stopped
-C_USER_A_ENABLED: "true"
+enabled: "true"
 
 # Rootfs image size, for example 4G, 10G.
-C_USER_A_DISK: "6G"
+disk: "6G"
 
 # Memory limit written to lxc cgroup config, for example 96M, 512M.
-C_USER_A_MEMORY: "512M"
+memory: "512M"
 
 # CPU field reserved by config/state (not actively enforced yet by current script).
-C_USER_A_CPU: "1"
+cpu: "1"
 
 # Distro for lxc-download template, for example alpine, debian, ubuntu.
-C_USER_A_DISTRO: "debian"
+distro: "debian"
 
 # Distro release, for example 3.23, bookworm, jammy.
-C_USER_A_RELEASE: "bookworm"
+release: "bookworm"
 
 # Container architecture, for example amd64, arm64.
-C_USER_A_ARCH: "amd64"
+arch: "amd64"
 
 # Optional fixed IPv6 address.
 # Use "auto" or omit to auto-assign from prefix.
-C_USER_A_IPV6: "auto"
+ipv6: "auto"
 
 # Host SSH proxy port (10.10.0.1:<port> -> container:22).
-C_USER_A_SSH_PORT: "22022"
+ssh_port: "22022"
 
-# Host-to-container port mappings: "host:container" pairs separated by spaces.
-# Example below maps host 8080->container 80 and 8443->container 443.
-C_USER_A_PORTS: "8080:80 8443:443"
+# Host-to-container port mappings.
+# You can use list style (recommended) or a single space-separated string.
+ports:
+  - "8080:80"
+  - "8443:443"
 
-# SNI mappings used by sniproxy: "hostname:host_port" pairs.
-# host_port should match a port published in C_USER_A_PORTS.
-C_USER_A_SNI: "app.example.com:8443"
+# SNI mappings used by sniproxy: "hostname:host_port".
+# host_port should match a port published in ports.
+sni:
+  - "app.example.com:8443"
 
-# Space-separated key names to include from KEY_<NAME> entries.
-C_USER_A_KEYS: "ADMIN OPS"
-
-# Public key content for key name ADMIN.
-C_USER_A_KEY_ADMIN: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... admin@example"
-
-# Public key content for key name OPS.
-C_USER_A_KEY_OPS: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ... ops@example"
+# SSH public keys map.
+# Preferred style: key name -> public key.
+keys:
+  admin: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... admin@example"
+  ops: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ... ops@example"
