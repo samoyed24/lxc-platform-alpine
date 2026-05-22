@@ -453,8 +453,7 @@ ensure_network() {
 
   if ! ip link show "$BRIDGE" >/dev/null 2>&1; then
     command -v modprobe >/dev/null 2>&1 && modprobe bridge >/dev/null 2>&1 || true
-    err="$(ip link add "$BRIDGE" type bridge 2>&1)"
-    if [ $? -ne 0 ]; then
+    if ! err="$(ip link add "$BRIDGE" type bridge 2>&1)"; then
       echo "failed to create bridge $BRIDGE" >&2
       [ -n "$err" ] && echo "$err" >&2
       if printf '%s' "$err" | grep -qi 'Unknown device type'; then
@@ -1218,8 +1217,9 @@ bootstrap() {
     lxc \
     lxc-download
 
-  if ! command -v modprobe >/dev/null 2>&1 || ! modprobe bridge >/dev/null 2>&1; then
-    echo "[bootstrap] warning: bridge module is unavailable in current kernel; reboot may be required before apply" >&2
+  if ! ensure_network; then
+    echo "[bootstrap] bridge setup failed; reboot the host and rerun bootstrap" >&2
+    return 1
   fi
 
   SSHPIPER_VERSION="${SSHPIPER_VERSION:-v1.5.3}"
@@ -1425,7 +1425,6 @@ EOF
   rc-update add sshpiperd default >/dev/null 2>&1 || true
   rc-update add lxc-platform default >/dev/null 2>&1 || true
 
-  ensure_network
   if command -v iptables-save >/dev/null 2>&1; then
     mkdir -p /etc/iptables
     iptables-save > /etc/iptables/rules-save || true
