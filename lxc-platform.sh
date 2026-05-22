@@ -91,7 +91,7 @@ container_state() {
 
 write_container_state() {
   local id="$1" ipv4="${2:-}" ct route ipv6 mask state ts out
-  local enabled_raw enabled ssh_port ports sni disk memory cpu distro release arch
+  local enabled_raw enabled ssh_port ports sni disk memory cpu distro release arch backend_key_version
 
   ct="$(ct_name "$id")"
   route="$(route_name "$id")"
@@ -126,6 +126,7 @@ write_container_state() {
   distro="$(cfg "$id" DISTRO)"
   release="$(cfg "$id" RELEASE)"
   arch="$(cfg "$id" ARCH)"
+  backend_key_version="$(cfg "$id" BACKEND_KEY_VERSION)"
   [ -n "$distro" ] || distro="$DEFAULT_DISTRO"
   [ -n "$release" ] || release="$DEFAULT_RELEASE"
   [ -n "$arch" ] || arch="$DEFAULT_ARCH"
@@ -146,6 +147,7 @@ write_container_state() {
   "distro": "$(json_escape "$distro")",
   "release": "$(json_escape "$release")",
   "arch": "$(json_escape "$arch")",
+  "backend_key_version": "$(json_escape "$backend_key_version")",
   "ipv4": "$(json_escape "$ipv4")",
   "ipv6": "$(json_escape "$ipv6")",
   "ipv6_mask": "$(json_escape "$mask")",
@@ -167,6 +169,31 @@ ensure_route_dir() {
   fi
 
   chmod 600 "$rd/id_rsa" "$rd/id_rsa.pub"
+}
+
+rotate_backend_key_if_needed() {
+  local id="$1" rd desired current marker
+  rd="$(route_dir "$id")"
+  desired="$(cfg "$id" BACKEND_KEY_VERSION)"
+  marker="$rd/backend_key_version"
+
+  [ -n "$desired" ] || return 0
+
+  current=""
+  if [ -f "$marker" ]; then
+    current="$(cat "$marker")"
+  fi
+
+  if [ "$desired" = "$current" ]; then
+    return 0
+  fi
+
+  echo "[keys] rotate backend key for $id (version: $desired)"
+  rm -f "$rd/id_rsa" "$rd/id_rsa.pub"
+  ssh-keygen -t rsa -b 3072 -N "" -f "$rd/id_rsa" >/dev/null
+  chmod 600 "$rd/id_rsa" "$rd/id_rsa.pub"
+  printf '%s' "$desired" > "$marker"
+  chmod 600 "$marker"
 }
 
 rootfs_img() {
@@ -716,6 +743,7 @@ create_container() {
   ensure_network
   ensure_dnsmasq
   ensure_route_dir "$id"
+  rotate_backend_key_if_needed "$id"
   sync_user_keys "$id"
 
   ipv6=""
@@ -854,6 +882,8 @@ start_container() {
 
   ensure_network
   ensure_dnsmasq
+  ensure_route_dir "$id"
+  rotate_backend_key_if_needed "$id"
 
   mkdir -p "$rootfs"
   mountpoint -q "$rootfs" || mount -o loop "$img" "$rootfs"

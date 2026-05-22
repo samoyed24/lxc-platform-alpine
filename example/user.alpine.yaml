@@ -10,6 +10,10 @@ C_USER_A_NAME: "user-a"
 # Route name used by sshpiper route directory.
 C_USER_A_ROUTE: "user-a"
 
+# Backend key rotation trigger.
+# Change this value (for example v1 -> v2) and run apply to rotate host->container backend key.
+C_USER_A_BACKEND_KEY_VERSION: "v1"
+
 # Desired state:
 # - true: container should exist/running (apply creates/starts)
 # - false: container should be stopped
