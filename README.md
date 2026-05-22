@@ -69,16 +69,12 @@ cp example/platform.yaml platform.yaml
 
 7. Create or update user container YAML files, then place them in `CONFIG_DIR` (default `/opt/lxc-platform/lxc.d`).
 
-8. Apply configuration:
-
-```bash
-./lxc-platform.sh apply
-```
+   The `lxc-platform-watch` service will detect the changes automatically and apply them. No manual step needed.
 
 ### Command Notes
 
-- `bootstrap`: installs dependencies and services on the host.
-- `apply`: reconciles containers from config files in `CONFIG_DIR`.
+- `bootstrap`: installs dependencies and services on the host. Also installs and starts `lxc-platform-watch`, which monitors `CONFIG_DIR` for file changes and runs `apply` automatically.
+- `apply`: reconciles containers from config files in `CONFIG_DIR`. Normally invoked automatically by the watch service; can also be run manually.
 - `status`: prints runtime status for configured users.
 - `doctor`: prints diagnostics for bridge/network/lxc/sniproxy.
 
