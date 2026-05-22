@@ -33,30 +33,43 @@ Run from this directory:
 
 ## Quick Operation Flow
 
-1. Install base tools on Alpine host:
+1. Update and upgrade Alpine packages first:
 
 ```bash
-apk add --no-cache bash git
+apk update
+apk upgrade --available
 ```
 
-2. Clone repository:
+2. Install base tools on Alpine host:
 
 ```bash
-git clone git@github.com:samoyed24/lxc-platform-alpine.git
+apk add --no-cache bash git vim
+```
+
+3. Clone repository:
+
+```bash
+git clone https://github.com/samoyed24/lxc-platform-alpine.git
 cd lxc-platform-alpine
 ```
 
-3. Edit global config `platform.yaml` for your environment.
+4. Copy example platform config to project root:
 
-4. Run bootstrap:
+```bash
+cp example/platform.yaml platform.yaml
+```
+
+5. Edit global config `platform.yaml` for your environment.
+
+6. Run bootstrap:
 
 ```bash
 ./lxc-platform.sh bootstrap
 ```
 
-5. Create or update user container YAML files, then place them in `CONFIG_DIR` (default `/opt/lxc-platform/lxc.d`).
+7. Create or update user container YAML files, then place them in `CONFIG_DIR` (default `/opt/lxc-platform/lxc.d`).
 
-6. Apply configuration:
+8. Apply configuration:
 
 ```bash
 ./lxc-platform.sh apply
