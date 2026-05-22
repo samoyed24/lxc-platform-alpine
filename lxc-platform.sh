@@ -4,10 +4,26 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="${CONFIG:-${BASE_DIR}/platform.yaml}"
 CONFIG_DIR="${CONFIG_DIR:-${BASE_DIR}/lxc.d}"
+declare -A USER_CFG
+
+normalize_yaml_scalar() {
+  local value="$1"
+
+  value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+  if [[ "$value" =~ ^\".*\"$ ]]; then
+    value="${value:1:${#value}-2}"
+    value="${value//\\\"/\"}"
+  elif [[ "$value" =~ ^\'.*\'$ ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+
+  printf '%s' "$value"
+}
 
 parse_yaml_file() {
   local file="$1"
-  local line key value
+  local line key value upper_key
 
   [ -f "$file" ] || return 0
 
@@ -17,32 +33,114 @@ parse_yaml_file() {
 
     if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:[[:space:]]*(.*)$ ]]; then
       key="${BASH_REMATCH[1]}"
-      value="${BASH_REMATCH[2]}"
-
-      value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-
-      if [[ "$value" =~ ^\".*\"$ ]]; then
-        value="${value:1:${#value}-2}"
-        value="${value//\\\"/\"}"
-      elif [[ "$value" =~ ^\'.*\'$ ]]; then
-        value="${value:1:${#value}-2}"
-      fi
+      value="$(normalize_yaml_scalar "${BASH_REMATCH[2]}")"
 
       printf -v "$key" '%s' "$value"
       export "$key"
+
+      upper_key="$(printf '%s' "$key" | tr 'a-z' 'A-Z')"
+      if [ "$upper_key" != "$key" ]; then
+        printf -v "$upper_key" '%s' "$value"
+        export "$upper_key"
+      fi
     fi
   done < "$file"
 }
 
+set_user_cfg() {
+  local id="$1" key="$2" value="$3"
+  key="$(printf '%s' "$key" | tr 'A-Z' 'a-z')"
+  USER_CFG["${id}.${key}"]="$value"
+}
+
+parse_user_yaml_file() {
+  local file="$1" id="$2"
+  local line key value raw_value block_key block_mode list_values item legacy_prefix
+  local subkey subvalue
+
+  [ -f "$file" ] || return 0
+
+  legacy_prefix="C_${id}_"
+  block_key=""
+  block_mode=""
+  list_values=""
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+    if [ -n "$block_key" ] && [[ "$line" =~ ^[[:space:]]+ ]]; then
+      if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*(.*)$ ]]; then
+        block_mode="list"
+        item="$(normalize_yaml_scalar "${BASH_REMATCH[1]}")"
+        if [ -n "$list_values" ]; then
+          list_values="${list_values} ${item}"
+        else
+          list_values="$item"
+        fi
+        continue
+      fi
+
+      if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:[[:space:]]*(.*)$ ]]; then
+        block_mode="map"
+        subkey="$(printf '%s' "${BASH_REMATCH[1]}" | tr 'A-Z' 'a-z')"
+        subvalue="$(normalize_yaml_scalar "${BASH_REMATCH[2]}")"
+        set_user_cfg "$id" "${block_key}.${subkey}" "$subvalue"
+        continue
+      fi
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:[[:space:]]*(.*)$ ]]; then
+      if [ -n "$block_key" ] && [ "$block_mode" = "list" ]; then
+        set_user_cfg "$id" "$block_key" "$list_values"
+      fi
+      if [ -n "$block_key" ]; then
+        block_key=""
+        block_mode=""
+        list_values=""
+      fi
+
+      key="${BASH_REMATCH[1]}"
+      raw_value="$(printf '%s' "${BASH_REMATCH[2]}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+      if [[ "$key" == "${legacy_prefix}"* ]]; then
+        key="${key#$legacy_prefix}"
+      elif [[ "$key" =~ ^C_[A-Za-z0-9_-]+_(.+)$ ]]; then
+        key="${BASH_REMATCH[1]}"
+      fi
+
+      if [ -z "$raw_value" ]; then
+        block_key="$key"
+        block_mode=""
+        list_values=""
+      else
+        value="$(normalize_yaml_scalar "$raw_value")"
+        set_user_cfg "$id" "$key" "$value"
+      fi
+
+      continue
+    fi
+  done < "$file"
+
+  if [ -n "$block_key" ] && [ "$block_mode" = "list" ]; then
+    set_user_cfg "$id" "$block_key" "$list_values"
+  fi
+}
+
 load_configs() {
+  local file id
+
   [ -f "$CONFIG" ] || { echo "config not found: $CONFIG" >&2; exit 1; }
 
   parse_yaml_file "$CONFIG"
 
+  USER_CFG=()
+
   if [ -d "$CONFIG_DIR" ]; then
     for file in "$CONFIG_DIR"/*.yaml; do
       [ -f "$file" ] || continue
-      parse_yaml_file "$file"
+      id="$(basename "$file" .yaml)"
+      parse_user_yaml_file "$file" "$id"
     done
   fi
 }
@@ -61,9 +159,9 @@ need() {
 }
 
 cfg() {
-  local id="$1" key="$2" var
-  var="C_${id}_${key}"
-  eval "printf '%s' \"\${$var:-}\""
+  local id="$1" key="$2"
+  key="$(printf '%s' "$key" | tr 'A-Z' 'a-z')"
+  printf '%s' "${USER_CFG["${id}.${key}"]:-}"
 }
 
 json_escape() {
@@ -111,22 +209,22 @@ write_container_state() {
 
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  enabled_raw="$(cfg "$id" ENABLED)"
+  enabled_raw="$(cfg "$id" enabled)"
   enabled="true"
   if [ -n "$enabled_raw" ] && ! printf '%s' "$enabled_raw" | grep -Eiq '^(y|yes|1|true)$'; then
     enabled="false"
   fi
 
-  ssh_port="$(cfg "$id" SSH_PORT)"
-  ports="$(cfg "$id" PORTS)"
-  sni="$(cfg "$id" SNI)"
-  disk="$(cfg "$id" DISK)"
-  memory="$(cfg "$id" MEMORY)"
-  cpu="$(cfg "$id" CPU)"
-  distro="$(cfg "$id" DISTRO)"
-  release="$(cfg "$id" RELEASE)"
-  arch="$(cfg "$id" ARCH)"
-  backend_key_version="$(cfg "$id" BACKEND_KEY_VERSION)"
+  ssh_port="$(cfg "$id" ssh_port)"
+  ports="$(cfg "$id" ports)"
+  sni="$(cfg "$id" sni)"
+  disk="$(cfg "$id" disk)"
+  memory="$(cfg "$id" memory)"
+  cpu="$(cfg "$id" cpu)"
+  distro="$(cfg "$id" distro)"
+  release="$(cfg "$id" release)"
+  arch="$(cfg "$id" arch)"
+  backend_key_version="$(cfg "$id" backend_key_version)"
   [ -n "$distro" ] || distro="$DEFAULT_DISTRO"
   [ -n "$release" ] || release="$DEFAULT_RELEASE"
   [ -n "$arch" ] || arch="$DEFAULT_ARCH"
@@ -174,7 +272,7 @@ ensure_route_dir() {
 rotate_backend_key_if_needed() {
   local id="$1" rd desired current marker
   rd="$(route_dir "$id")"
-  desired="$(cfg "$id" BACKEND_KEY_VERSION)"
+  desired="$(cfg "$id" backend_key_version)"
   marker="$rd/backend_key_version"
 
   [ -n "$desired" ] || return 0
@@ -264,7 +362,7 @@ get_ipv6() {
   rd="$(route_dir "$id")"
   mkdir -p "$rd"
 
-  ip="$(cfg "$id" IPV6)"
+  ip="$(cfg "$id" ipv6)"
 
   if [ "$ip" = "auto" ] || [ -z "$ip" ]; then
     if [ -s "$rd/ipv6_addr" ]; then
@@ -440,17 +538,36 @@ ensure_container_ipv6_route() {
 }
 
 sync_user_keys() {
-  local id="$1" rd keydir keynames keyname value
+  local id="$1" rd keydir keynames keyname value entry prefix
   rd="$(route_dir "$id")"
   keydir="$rd/authorized_keys.d"
 
   mkdir -p "$keydir"
   rm -f "$keydir"/*.pub 2>/dev/null || true
 
-  keynames="$(cfg "$id" KEYS)"
+  keynames="$(cfg "$id" keys)"
+
+  if [ -z "$keynames" ]; then
+    prefix="${id}.keys."
+    for entry in "${!USER_CFG[@]}"; do
+      case "$entry" in
+        "$prefix"*)
+          keyname="${entry#$prefix}"
+          [ -n "$keyname" ] || continue
+          if [ -n "$keynames" ]; then
+            keynames="${keynames} ${keyname}"
+          else
+            keynames="$keyname"
+          fi
+          ;;
+      esac
+    done
+  fi
 
   for keyname in $keynames; do
-    value="$(cfg "$id" "KEY_${keyname}")"
+    keyname="$(printf '%s' "$keyname" | tr 'A-Z' 'a-z')"
+    value="$(cfg "$id" "key_${keyname}")"
+    [ -n "$value" ] || value="$(cfg "$id" "keys.${keyname}")"
     [ -n "$value" ] || continue
 
     printf '%s\n' "$value" \
@@ -556,7 +673,7 @@ ensure_proxies_for() {
 
   expected_services["lxc-${ct}-ssh"]=1
 
-  ports="$(cfg "$id" PORTS)"
+  ports="$(cfg "$id" ports)"
   for pair in $ports; do
     hp="${pair%%:*}"
     [ -n "$hp" ] || continue
@@ -573,7 +690,7 @@ ensure_proxies_for() {
     fi
   done
 
-  ssh_port="$(cfg "$id" SSH_PORT)"
+  ssh_port="$(cfg "$id" ssh_port)"
   write_proxy_service "lxc-${ct}-ssh" "10.10.0.1" "$ssh_port" "$ip" "22"
 
   for pair in $ports; do
@@ -667,7 +784,7 @@ render_sniproxy() {
       [ -f "$file" ] || continue
       id="$(basename "$file" .yaml)"
       local sni_routes item host port
-      sni_routes="$(cfg "$id" SNI)"
+      sni_routes="$(cfg "$id" sni)"
       for item in $sni_routes; do
         host="${item%%:*}"
         port="${item##*:}"
@@ -719,12 +836,12 @@ create_container() {
   ct="$(ct_name "$id")"
   rd="$(route_dir "$id")"
   img="$(rootfs_img "$id")"
-  disk="$(cfg "$id" DISK)"
-  mem="$(cfg "$id" MEMORY)"
-  cpu="$(cfg "$id" CPU)"
-  distro="$(cfg "$id" DISTRO)"
-  release="$(cfg "$id" RELEASE)"
-  arch="$(cfg "$id" ARCH)"
+  disk="$(cfg "$id" disk)"
+  mem="$(cfg "$id" memory)"
+  cpu="$(cfg "$id" cpu)"
+  distro="$(cfg "$id" distro)"
+  release="$(cfg "$id" release)"
+  arch="$(cfg "$id" arch)"
 
   [ -n "$distro" ] || distro="$DEFAULT_DISTRO"
   [ -n "$release" ] || release="$DEFAULT_RELEASE"
@@ -850,7 +967,7 @@ rc-service sshd restart || /usr/sbin/sshd
   ensure_proxies_for "$id"
 
   cat > "$rd/sshpiper_upstream" <<EOF2
-root@10.10.0.1:$(cfg "$id" SSH_PORT)
+root@10.10.0.1:$(cfg "$id" ssh_port)
 EOF2
   chmod 600 "$rd/sshpiper_upstream"
 
@@ -868,7 +985,7 @@ EOF2
     echo "  ipv6:    $ipv6/$mask"
   fi
   echo "  route:   $(route_name "$id")"
-  echo "  ssh:     10.10.0.1:$(cfg "$id" SSH_PORT)"
+  echo "  ssh:     10.10.0.1:$(cfg "$id" ssh_port)"
 }
 
 start_container() {
@@ -961,7 +1078,7 @@ apply_all() {
     [ -f "$file" ] || continue
     id="$(basename "$file" .yaml)"
 
-    enabled="$(cfg "$id" ENABLED)"
+    enabled="$(cfg "$id" enabled)"
     if [ -n "$enabled" ] && ! printf '%s' "$enabled" | grep -Eiq '^(y|yes|1|true)$'; then
       echo "ensuring stopped (disabled): $id"
       stop_container "$id" || true

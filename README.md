@@ -85,13 +85,16 @@ cp example/platform.yaml platform.yaml
 ## Configuration Model
 
 1. Global config is loaded from `platform.yaml`.
-2. User configs are loaded from `CONFIG_DIR` (for example `/opt/lxc-platform/lxc.d`).
-3. Each user config filename is the user id, for example `USER_A.yaml`.
-4. User keys must be prefixed with `C_<ID>_`, matching the file id.
+2. Global config examples use lowercase keys (script accepts lowercase and maps them internally).
+3. User configs are loaded from `CONFIG_DIR` (for example `/opt/lxc-platform/lxc.d`).
+4. Each user config filename is the user id, for example `user-a.yaml`.
+5. User config uses plain lowercase keys (for example `name`, `route`, `ports`) and does not require `C_<ID>_` prefix.
+6. List style is supported for fields such as `ports` and `sni`.
+7. SSH keys support map style under `keys` (`name: public_key`), which is the recommended format.
 
 Example:
-- file: `USER_A.yaml`
-- key prefix: `C_USER_A_...`
+- file: `user-a.yaml`
+- keys: `name`, `route`, `ports`, `sni`, `keys`
 
 ## Runtime State For API
 
