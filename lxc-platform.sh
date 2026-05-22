@@ -324,9 +324,20 @@ configure_container_dns() {
 }
 
 ensure_network() {
-  local uplink
+  local uplink err
 
-  ip link show "$BRIDGE" >/dev/null 2>&1 || ip link add "$BRIDGE" type bridge
+  if ! ip link show "$BRIDGE" >/dev/null 2>&1; then
+    command -v modprobe >/dev/null 2>&1 && modprobe bridge >/dev/null 2>&1 || true
+    err="$(ip link add "$BRIDGE" type bridge 2>&1)"
+    if [ $? -ne 0 ]; then
+      echo "failed to create bridge $BRIDGE" >&2
+      [ -n "$err" ] && echo "$err" >&2
+      if printf '%s' "$err" | grep -qi 'Unknown device type'; then
+        echo "hint: bridge module is unavailable in current kernel; reboot and retry apply" >&2
+      fi
+      return 1
+    fi
+  fi
   ip link set "$BRIDGE" up
   ip addr add "$IPV4_CIDR" dev "$BRIDGE" 2>/dev/null || true
 
