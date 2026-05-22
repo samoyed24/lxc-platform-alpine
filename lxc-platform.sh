@@ -1215,7 +1215,8 @@ bootstrap() {
     rsync \
     e2fsprogs \
     lxc \
-    lxc-download
+    lxc-download \
+    inotify-tools
 
   if ! ensure_network; then
     echo "[bootstrap] bridge setup failed; reboot the host and rerun bootstrap" >&2
@@ -1380,6 +1381,40 @@ EOF
 
   chmod +x /etc/init.d/lxc-platform
 
+  cat > /usr/local/bin/lxc-platform-watchd <<EOF
+#!/usr/bin/env sh
+while true; do
+  if inotifywait -r -q -e close_write,create,delete,move "${CONFIG_DIR}" 2>/dev/null; then
+    sleep 3
+    "${BASE_DIR}/lxc-platform.sh" apply || true
+  else
+    sleep 5
+  fi
+done
+EOF
+
+  chmod +x /usr/local/bin/lxc-platform-watchd
+
+  cat > /etc/init.d/lxc-platform-watch <<EOF
+#!/sbin/openrc-run
+
+name="lxc-platform-watch"
+description="Watch lxc.d for changes and auto-apply"
+
+command="/usr/local/bin/lxc-platform-watchd"
+command_background="yes"
+pidfile="/run/lxc-platform-watch.pid"
+
+output_log="/var/log/lxc-platform-watch.log"
+error_log="/var/log/lxc-platform-watch.log"
+
+depend() {
+  need lxc-platform
+}
+EOF
+
+  chmod +x /etc/init.d/lxc-platform-watch
+
   cat > /etc/local.d/lxc-network.start <<EOF
 #!/bin/sh
 ip link show "${BRIDGE}" >/dev/null 2>&1 || ip link add "${BRIDGE}" type bridge
@@ -1424,6 +1459,7 @@ EOF
   rc-update add sniproxy default >/dev/null 2>&1 || true
   rc-update add sshpiperd default >/dev/null 2>&1 || true
   rc-update add lxc-platform default >/dev/null 2>&1 || true
+  rc-update add lxc-platform-watch default >/dev/null 2>&1 || true
 
   if command -v iptables-save >/dev/null 2>&1; then
     mkdir -p /etc/iptables
@@ -1435,6 +1471,7 @@ EOF
   rc-service lxc-dnsmasq restart >/dev/null 2>&1 || rc-service lxc-dnsmasq start >/dev/null 2>&1 || true
   rc-service sniproxy restart >/dev/null 2>&1 || rc-service sniproxy start >/dev/null 2>&1 || true
   rc-service sshpiperd restart >/dev/null 2>&1 || rc-service sshpiperd start >/dev/null 2>&1 || true
+  rc-service lxc-platform-watch restart >/dev/null 2>&1 || rc-service lxc-platform-watch start >/dev/null 2>&1 || true
 
   echo "[bootstrap] done"
 }
