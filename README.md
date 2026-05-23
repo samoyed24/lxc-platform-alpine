@@ -4,6 +4,7 @@ A lightweight LXC platform script for creating and managing per-user containers 
 - automatic bridge/NAT networking
 - optional IPv6 allocation
 - sshpiper + sniproxy routing
+- bundled metrics/API agent bootstrap and OpenRC integration
 - OpenRC service integration
 - runtime state files for API consumption
 
@@ -19,6 +20,7 @@ A lightweight LXC platform script for creating and managing per-user containers 
 - `example/platform.yaml`: documented global config example
 - `example/user.alpine.yaml`: documented per-user config example (Alpine)
 - `example/user.debian.yaml`: documented per-user config example (Debian, reference)
+- `agent/`: bundled Go metrics/API agent source
 
 ## Commands
 
@@ -74,6 +76,7 @@ cp example/platform.yaml platform.yaml
 ### Command Notes
 
 - `bootstrap`: installs dependencies and services on the host. Also installs and starts `lxc-platform-watch`, which monitors `CONFIG_DIR` for file changes and runs `apply` automatically.
+- `bootstrap`: also compiles the bundled agent into the platform runtime directory, renders its config from `platform.yaml`, installs `lxc-platform-agent` OpenRC service, and starts it.
 - `apply`: reconciles containers from config files in `CONFIG_DIR`. Normally invoked automatically by the watch service; can also be run manually.
 - `status`: prints runtime status for configured users.
 - `doctor`: prints diagnostics for bridge/network/lxc/sniproxy.
@@ -87,10 +90,12 @@ cp example/platform.yaml platform.yaml
 5. User config uses plain lowercase keys (for example `name`, `route`, `ports`) and does not require `C_<ID>_` prefix.
 6. List style is supported for fields such as `ports` and `sni`.
 7. SSH keys support map style under `keys` (`name: public_key`), which is the recommended format.
+8. Optional per-container bandwidth limits are supported with `bandwidth_up` and `bandwidth_down` (tc rate format, for example `20mbit`, `500kbit`).
+9. Agent settings are now managed from `platform.yaml` via `agent_*` keys; the standalone `agent/config.yaml` is treated as source reference only.
 
 Example:
 - file: `user-a.yaml`
-- keys: `name`, `route`, `ports`, `sni`, `keys`
+- keys: `name`, `route`, `ports`, `sni`, `keys`, `bandwidth_up`, `bandwidth_down`
 
 ## Runtime State For API
 
@@ -99,6 +104,25 @@ Container state files are written under:
 - `/opt/lxc-platform/runtime/state/containers/<container>.json`
 
 These files are refreshed on create/start/stop/apply flows and can be consumed by your API.
+
+## Bundled Agent
+
+During `bootstrap`, lxc-platform will:
+
+- install Go build dependency on Alpine hosts
+- compile the bundled agent from `agent/` into the runtime directory
+- render agent runtime config from `platform.yaml`
+- install and enable `lxc-platform-agent` OpenRC service
+- start the agent automatically
+
+Default runtime paths:
+
+- binary: `/opt/lxc-platform/runtime/agent/bin/lxc-platform-agent`
+- config: `/opt/lxc-platform/runtime/generated/agent.yaml`
+- state: `/opt/lxc-platform/runtime/state/agent/lxc-platform-agent-state.json`
+- log: `/var/log/lxc-platform-agent.log`
+
+The agent exposes Prometheus metrics and REST API based on the `agent_*` settings in `platform.yaml`.
 
 ## Examples
 

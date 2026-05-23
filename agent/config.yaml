@@ -1,0 +1,23 @@
+# AK/SK credentials for request signing.
+ak: "your-ak"
+sk: "your-sk"
+
+# Optional prefix string mixed into signature payload.
+signature_scope: "lxc-platform-agent"
+
+# Accepted timestamp skew in seconds for signature auth.
+auth_timestamp_skew_seconds: 300
+
+# HTTP server settings for passive scrape and RESTful API.
+listen_addr: ":9108"
+metrics_path: "/metrics"
+api_base_path: "/api/v1"
+
+# LXC/network collection parameters.
+container_interface: "eth0"
+platform_state_dir: "/opt/lxc-platform/runtime/state/containers"
+config_dir: "/opt/lxc-platform/lxc.d"
+image_dir: "/opt/lxc-platform/runtime/images"
+
+# Persistent local state file for cumulative traffic counters.
+state_file: "/opt/lxc-platform/runtime/state/agent/lxc-platform-agent-state.json"
