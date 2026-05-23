@@ -74,6 +74,42 @@ sshpiper_plugin_dir: "/opt/lxc-platform/runtime/sshpiper/plugins"
 # sshpiper workingdir plugin binary path.
 sshpiper_workingdir_plugin: "/opt/lxc-platform/runtime/sshpiper/plugins/workingdir"
 
+# Build and enable the bundled metrics/API agent during bootstrap.
+agent_enabled: "true"
+
+# Runtime directory for the compiled agent binary.
+agent_runtime_dir: "/opt/lxc-platform/runtime/agent"
+
+# Compiled agent binary output path.
+agent_bin: "/opt/lxc-platform/runtime/agent/bin/lxc-platform-agent"
+
+# Generated runtime config path for the agent.
+agent_config: "/opt/lxc-platform/runtime/generated/agent.yaml"
+
+# Persistent local state file for cumulative counters.
+agent_state_file: "/opt/lxc-platform/runtime/state/agent/lxc-platform-agent-state.json"
+
+# OpenRC output/error log path for the agent service.
+agent_log: "/var/log/lxc-platform-agent.log"
+
+# AK/SK used by the agent metrics/API auth.
+agent_ak: "your-ak"
+agent_sk: "your-sk"
+
+# Optional signature scope string.
+agent_signature_scope: "lxc-platform-agent"
+
+# Accepted signature timestamp skew in seconds.
+agent_auth_timestamp_skew_seconds: "300"
+
+# Agent HTTP listen address and paths.
+agent_listen_addr: ":9108"
+agent_metrics_path: "/metrics"
+agent_api_base_path: "/api/v1"
+
+# Container network interface name used for collection.
+agent_container_interface: "eth0"
+
 # Default distro used when a user config omits DISTRO.
 default_distro: "alpine"
 

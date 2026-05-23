@@ -1,0 +1,14 @@
+bin/
+/lxc-platform-agent
+
+run/*.pid
+run/*.log
+run/*.sock
+run/*.tmp
+
+*.out
+*.test
+coverage.out
+
+.env
+.env.*

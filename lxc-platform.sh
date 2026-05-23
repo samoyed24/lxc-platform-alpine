@@ -148,6 +148,11 @@ load_configs() {
 load_configs
 
 SSHPIPER_TENANT_ROOT="${SSHPIPER_ROUTE_ROOT}/routes"
+AGENT_RUNTIME_DIR="${AGENT_RUNTIME_DIR:-${RUNTIME_DIR}/agent}"
+AGENT_BIN="${AGENT_BIN:-${AGENT_RUNTIME_DIR}/bin/lxc-platform-agent}"
+AGENT_CONFIG="${AGENT_CONFIG:-${RUNTIME_DIR}/generated/agent.yaml}"
+AGENT_STATE_FILE="${AGENT_STATE_FILE:-${RUNTIME_DIR}/state/agent/lxc-platform-agent-state.json}"
+AGENT_LOG="${AGENT_LOG:-/var/log/lxc-platform-agent.log}"
 
 mkdir -p "$RUNTIME_DIR" "$SSHPIPER_ROUTE_ROOT" "$SSHPIPER_TENANT_ROOT" "$IMAGE_DIR" "$RUNTIME_DIR/generated" "$RUNTIME_DIR/state/containers"
 
@@ -183,13 +188,25 @@ container_state_file_by_ct() {
   printf '%s/state/containers/%s.json' "$RUNTIME_DIR" "$1"
 }
 
+route_dir_by_ct() {
+  local ct="$1" state_file route
+
+  state_file="$(container_state_file_by_ct "$ct")"
+  [ -f "$state_file" ] || return 1
+
+  route="$(sed -n 's/^[[:space:]]*"route"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$state_file" | head -1)"
+  [ -n "$route" ] || return 1
+
+  printf '%s/%s' "$SSHPIPER_TENANT_ROOT" "$route"
+}
+
 container_state() {
   lxc-info -n "$1" 2>/dev/null | awk -F: '/State/ {gsub(/ /, "", $2); print $2}'
 }
 
 write_container_state() {
   local id="$1" ipv4="${2:-}" ct route ipv6 mask state ts out
-  local enabled_raw enabled ssh_port ports sni disk memory cpu distro release arch backend_key_version
+  local enabled_raw enabled ssh_port ports sni disk memory cpu distro release arch backend_key_version bandwidth_up bandwidth_down
 
   ct="$(ct_name "$id")"
   route="$(route_name "$id")"
@@ -225,6 +242,8 @@ write_container_state() {
   release="$(cfg "$id" release)"
   arch="$(cfg "$id" arch)"
   backend_key_version="$(cfg "$id" backend_key_version)"
+  bandwidth_up="$(cfg "$id" bandwidth_up)"
+  bandwidth_down="$(cfg "$id" bandwidth_down)"
   [ -n "$distro" ] || distro="$DEFAULT_DISTRO"
   [ -n "$release" ] || release="$DEFAULT_RELEASE"
   [ -n "$arch" ] || arch="$DEFAULT_ARCH"
@@ -246,6 +265,8 @@ write_container_state() {
   "release": "$(json_escape "$release")",
   "arch": "$(json_escape "$arch")",
   "backend_key_version": "$(json_escape "$backend_key_version")",
+  "bandwidth_up": "$(json_escape "$bandwidth_up")",
+  "bandwidth_down": "$(json_escape "$bandwidth_down")",
   "ipv4": "$(json_escape "$ipv4")",
   "ipv6": "$(json_escape "$ipv6")",
   "ipv6_mask": "$(json_escape "$mask")",
@@ -625,6 +646,47 @@ wait_ipv4() {
   return 1
 }
 
+container_host_veth() {
+  local ct="$1" ifindex host_dev
+
+  ifindex="$(lxc-attach -n "$ct" -- sh -lc 'cat /sys/class/net/eth0/iflink' 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$ifindex" ] || return 1
+
+  host_dev="$(ip -o link | awk -F': ' -v idx="$ifindex" '$1 == idx {print $2; exit}' | sed 's/@.*//')"
+  [ -n "$host_dev" ] || return 1
+
+  printf '%s' "$host_dev"
+}
+
+apply_bandwidth_limit_for() {
+  local id="$1" ct dev up down
+  ct="$(ct_name "$id")"
+  up="$(cfg "$id" bandwidth_up)"
+  down="$(cfg "$id" bandwidth_down)"
+
+  if [ -z "$up" ] && [ -z "$down" ]; then
+    return 0
+  fi
+
+  dev="$(container_host_veth "$ct")" || {
+    echo "failed to resolve host veth for $ct" >&2
+    return 1
+  }
+
+  if [ -n "$down" ]; then
+    tc qdisc replace dev "$dev" root tbf rate "$down" burst 128kbit latency 50ms
+  else
+    tc qdisc del dev "$dev" root 2>/dev/null || true
+  fi
+
+  if [ -n "$up" ]; then
+    tc qdisc replace dev "$dev" handle ffff: ingress
+    tc filter replace dev "$dev" parent ffff: protocol all prio 1 u32 match u32 0 0 police rate "$up" burst 128k drop flowid :1
+  else
+    tc qdisc del dev "$dev" ingress 2>/dev/null || true
+  fi
+}
+
 write_proxy_service() {
   local svc="$1" host_ip="$2" host_port="$3" target_ip="$4" target_port="$5"
   local file="/etc/init.d/${svc}"
@@ -702,7 +764,7 @@ ensure_proxies_for() {
 install_sshpiper() {
   local version url tmp os arch
 
-  version="v1.5.3"
+  version="${SSHPIPER_VERSION:-v1.5.3}"
 
   os="$(uname -s)"
   arch="$(uname -m)"
@@ -752,13 +814,69 @@ install_sshpiper() {
 
   tar xzf "$tmp/sshpiper.tar.gz" -C "$tmp"
 
+  mkdir -p "$(dirname "$SSHPIPER_BIN")"
+
   install -m755 \
     "$tmp/sshpiperd" \
-    /usr/local/bin/sshpiperd
+    "$SSHPIPER_BIN"
+
+  if [ -d "$tmp/plugins" ]; then
+    rm -rf "$SSHPIPER_PLUGIN_DIR"
+    cp -a "$tmp/plugins" "$SSHPIPER_PLUGIN_DIR"
+    chmod +x "$SSHPIPER_PLUGIN_DIR"/* || true
+  fi
 
   rm -rf "$tmp"
 
-  sshpiperd -v || true
+  "$SSHPIPER_BIN" -v || true
+}
+
+agent_enabled() {
+  local v
+  v="${AGENT_ENABLED:-true}"
+  is_true "$v"
+}
+
+render_agent_config() {
+  mkdir -p "$(dirname "$AGENT_CONFIG")" "$(dirname "$AGENT_STATE_FILE")"
+
+  cat > "$AGENT_CONFIG" <<EOF
+ak: "${AGENT_AK:-your-ak}"
+sk: "${AGENT_SK:-your-sk}"
+signature_scope: "${AGENT_SIGNATURE_SCOPE:-lxc-platform-agent}"
+auth_timestamp_skew_seconds: ${AGENT_AUTH_TIMESTAMP_SKEW_SECONDS:-300}
+listen_addr: "${AGENT_LISTEN_ADDR:-:9108}"
+metrics_path: "${AGENT_METRICS_PATH:-/metrics}"
+api_base_path: "${AGENT_API_BASE_PATH:-/api/v1}"
+container_interface: "${AGENT_CONTAINER_INTERFACE:-eth0}"
+platform_state_dir: "${RUNTIME_DIR}/state/containers"
+config_dir: "${CONFIG_DIR}"
+image_dir: "${IMAGE_DIR}"
+state_file: "${AGENT_STATE_FILE}"
+EOF
+
+  chmod 600 "$AGENT_CONFIG"
+}
+
+install_platform_agent() {
+  local agent_src
+
+  agent_src="${BASE_DIR}/agent"
+  [ -d "$agent_src" ] || {
+    echo "agent source not found: $agent_src" >&2
+    return 1
+  }
+
+  mkdir -p "$(dirname "$AGENT_BIN")"
+
+  echo "[agent] build binary"
+  (
+    cd "$agent_src"
+    go build -o "$AGENT_BIN" ./cmd/lxc-platform-agent
+  )
+
+  chmod +x "$AGENT_BIN"
+  render_agent_config
 }
 
 render_sniproxy() {
@@ -828,6 +946,79 @@ create_cleanup() {
   render_sniproxy || true
 
   echo "[ERROR] cleanup done"
+}
+
+install_container_sshd() {
+  local ct="$1"
+
+  echo "[create] install sshd"
+  configure_container_dns "$ct"
+  lxc-attach -n "$ct" -- sh -lc '
+set -e
+udhcpc -i eth0 || true
+
+if command -v apk >/dev/null 2>&1; then
+  for i in $(seq 1 10); do
+    if apk update; then
+      break
+    fi
+    [ "$i" -lt 10 ] || exit 1
+    sleep 2
+  done
+
+  apk add --no-cache openssh bash curl
+
+  ssh-keygen -A
+
+  sed -i "s/^#*PasswordAuthentication.*/PasswordAuthentication no/" /etc/ssh/sshd_config
+  sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config
+  sed -i "s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
+  sed -i "s/^#*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/" /etc/ssh/sshd_config
+  sed -i "s/^#*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/" /etc/ssh/sshd_config
+
+  rc-update add sshd default || true
+  rc-service sshd restart || /usr/sbin/sshd
+elif command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+
+  if command -v dhclient >/dev/null 2>&1; then
+    dhclient -v eth0 || true
+  fi
+
+  for i in $(seq 1 10); do
+    if apt-get update; then
+      break
+    fi
+    [ "$i" -lt 10 ] || exit 1
+    sleep 2
+  done
+
+  apt-get install -y --no-install-recommends openssh-server bash curl ca-certificates
+
+  mkdir -p /run/sshd
+  ssh-keygen -A
+
+  sed -i "s/^#*PasswordAuthentication.*/PasswordAuthentication no/" /etc/ssh/sshd_config
+  sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config
+  sed -i "s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
+  sed -i "s/^#*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/" /etc/ssh/sshd_config
+  sed -i "s/^#*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/" /etc/ssh/sshd_config
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable ssh >/dev/null 2>&1 || true
+    systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || true
+  fi
+
+  if command -v service >/dev/null 2>&1; then
+    service ssh restart >/dev/null 2>&1 || service sshd restart >/dev/null 2>&1 || true
+  fi
+
+  pgrep -x sshd >/dev/null 2>&1 || /usr/sbin/sshd
+else
+  echo "unsupported container package manager: need apk or apt-get" >&2
+  exit 1
+fi
+'
 }
 
 create_container() {
@@ -933,36 +1124,11 @@ EOF2
   restore_ipv6_for "$id"
   ensure_container_ipv6_route "$id"
 
-  echo "[create] install sshd"
-  configure_container_dns "$ct"
-  lxc-attach -n "$ct" -- sh -lc '
-set -e
-udhcpc -i eth0 || true
-
-for i in $(seq 1 10); do
-  if apk update; then
-    break
-  fi
-  [ "$i" -lt 10 ] || exit 1
-  sleep 2
-done
-
-apk add --no-cache openssh bash curl
-
-ssh-keygen -A
-
-sed -i "s/^#*PasswordAuthentication.*/PasswordAuthentication no/" /etc/ssh/sshd_config
-sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config
-sed -i "s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
-sed -i "s/^#*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/" /etc/ssh/sshd_config
-sed -i "s/^#*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/" /etc/ssh/sshd_config
-
-rc-update add sshd default || true
-rc-service sshd restart || /usr/sbin/sshd
-'
+  install_container_sshd "$ct"
 
   rebuild_keys "$id"
   ip="$(wait_ipv4 "$ct")"
+  apply_bandwidth_limit_for "$id"
   ensure_proxies_for "$id"
 
   cat > "$rd/sshpiper_upstream" <<EOF2
@@ -1013,6 +1179,7 @@ start_container() {
   ensure_container_ipv6_route "$id"
   sync_user_keys "$id"
   rebuild_keys "$id"
+  apply_bandwidth_limit_for "$id"
   ensure_proxies_for "$id"
   write_container_state "$id" "$ip"
 
@@ -1121,7 +1288,7 @@ apply_all() {
 
 delete_container_by_ct() {
   local ct="$1" rd img rootfs ip
-  rd="$SSHPIPER_TENANT_ROOT/$ct"
+  rd="$(route_dir_by_ct "$ct")"
   img="$IMAGE_DIR/${ct}.img"
   rootfs="/var/lib/lxc/${ct}/rootfs"
 
@@ -1153,6 +1320,7 @@ delete_container_by_ct() {
   rm -rf "/var/lib/lxc/$ct"
   rm -f "$img"
   rm -rf "$rd"
+  rm -f "$(container_state_file_by_ct "$ct")"
 
   render_sniproxy
 
@@ -1214,6 +1382,7 @@ bootstrap() {
     socat \
     rsync \
     e2fsprogs \
+    go \
     lxc \
     lxc-download \
     inotify-tools
@@ -1231,49 +1400,23 @@ bootstrap() {
     "$SSHPIPER_ROUTE_ROOT" \
     "$SSHPIPER_TENANT_ROOT" \
     "$SSHPIPER_PLUGIN_DIR" \
+    "$AGENT_RUNTIME_DIR" \
+    "$(dirname "$AGENT_BIN")" \
+    "$(dirname "$AGENT_CONFIG")" \
+    "$(dirname "$AGENT_STATE_FILE")" \
     "$(dirname "$SSHPIPER_HOSTKEY")" \
     "$IMAGE_DIR" \
     "$RUNTIME_DIR/generated" \
     /var/log/sniproxy \
     /etc/sniproxy
 
-  case "$(uname -s):$(uname -m)" in
-    Linux:x86_64|Linux:amd64)
-      SSHPIPER_URL="https://github.com/tg123/sshpiper/releases/download/${SSHPIPER_VERSION}/sshpiperd_with_plugins_linux_x86_64.tar.gz"
-      ;;
-    Linux:aarch64|Linux:arm64)
-      SSHPIPER_URL="https://github.com/tg123/sshpiper/releases/download/${SSHPIPER_VERSION}/sshpiperd_with_plugins_linux_arm64.tar.gz"
-      ;;
-    Darwin:arm64)
-      SSHPIPER_URL="https://github.com/tg123/sshpiper/releases/download/${SSHPIPER_VERSION}/sshpiperd_with_plugins_darwin_arm64.tar.gz"
-      ;;
-    Darwin:x86_64)
-      SSHPIPER_URL="https://github.com/tg123/sshpiper/releases/download/${SSHPIPER_VERSION}/sshpiperd_with_plugins_darwin_x86_64.tar.gz"
-      ;;
-    *)
-      echo "unsupported platform" >&2
-      exit 1
-      ;;
-  esac
-
   echo "[bootstrap] install sshpiper"
+  install_sshpiper
 
-  TMP="$(mktemp -d)"
-
-  curl -L "$SSHPIPER_URL" -o "$TMP/sshpiper.tar.gz"
-
-  tar xzf "$TMP/sshpiper.tar.gz" -C "$TMP"
-
-  install -m755 \
-    "$TMP/sshpiperd" \
-    "$SSHPIPER_BIN"
-
-  rm -rf "$SSHPIPER_PLUGIN_DIR"
-  cp -a "$TMP/plugins" "$SSHPIPER_PLUGIN_DIR"
-
-  chmod +x "$SSHPIPER_PLUGIN_DIR"/* || true
-
-  rm -rf "$TMP"
+  if agent_enabled; then
+    echo "[bootstrap] build platform agent"
+    install_platform_agent
+  fi
 
   if [ ! -f "$SSHPIPER_HOSTKEY" ]; then
     ssh-keygen -t ed25519 -N "" -f "$SSHPIPER_HOSTKEY" >/dev/null
@@ -1351,6 +1494,30 @@ EOF
 
   chmod +x /etc/init.d/sshpiperd
 
+  if agent_enabled; then
+    cat > /etc/init.d/lxc-platform-agent <<EOF
+#!/sbin/openrc-run
+
+name="lxc-platform-agent"
+description="LXC platform metrics agent"
+
+command="${AGENT_BIN}"
+command_args="-config ${AGENT_CONFIG}"
+command_background="yes"
+
+pidfile="/run/lxc-platform-agent.pid"
+
+output_log="${AGENT_LOG}"
+error_log="${AGENT_LOG}"
+
+depend() {
+  need net lxc-platform
+}
+EOF
+
+    chmod +x /etc/init.d/lxc-platform-agent
+  fi
+
   cat > /etc/init.d/lxc-platform <<EOF
 #!/sbin/openrc-run
 
@@ -1364,18 +1531,6 @@ start() {
   ebegin "Applying LXC platform"
   ${BASE_DIR}/lxc-platform.sh apply
   eend \$?
-}
-
-stop() {
-  ebegin "Stopping LXC platform"
-
-    for file in ${CONFIG_DIR}/*.yaml; do
-      [ -f "\$file" ] || continue
-      id="$(basename "\$file" .yaml)"
-      ${BASE_DIR}/lxc-platform.sh stop "\$id" || true
-    done
-
-  eend 0
 }
 EOF
 
@@ -1458,6 +1613,9 @@ EOF
   rc-update add lxc-dnsmasq default >/dev/null 2>&1 || true
   rc-update add sniproxy default >/dev/null 2>&1 || true
   rc-update add sshpiperd default >/dev/null 2>&1 || true
+  if agent_enabled; then
+    rc-update add lxc-platform-agent default >/dev/null 2>&1 || true
+  fi
   rc-update add lxc-platform default >/dev/null 2>&1 || true
   rc-update add lxc-platform-watch default >/dev/null 2>&1 || true
 
@@ -1471,6 +1629,9 @@ EOF
   rc-service lxc-dnsmasq restart >/dev/null 2>&1 || rc-service lxc-dnsmasq start >/dev/null 2>&1 || true
   rc-service sniproxy restart >/dev/null 2>&1 || rc-service sniproxy start >/dev/null 2>&1 || true
   rc-service sshpiperd restart >/dev/null 2>&1 || rc-service sshpiperd start >/dev/null 2>&1 || true
+  if agent_enabled; then
+    rc-service lxc-platform-agent restart >/dev/null 2>&1 || rc-service lxc-platform-agent start >/dev/null 2>&1 || true
+  fi
   rc-service lxc-platform-watch restart >/dev/null 2>&1 || rc-service lxc-platform-watch start >/dev/null 2>&1 || true
 
   echo "[bootstrap] done"

@@ -44,6 +44,12 @@ ipv6: "auto"
 # Host SSH proxy port (10.10.0.1:<port> -> container:22).
 ssh_port: "22022"
 
+# Optional bandwidth limits (tc rate format), for example 20mbit, 500kbit.
+# bandwidth_up: container -> host/uplink
+# bandwidth_down: host/uplink -> container
+bandwidth_up: "20mbit"
+bandwidth_down: "50mbit"
+
 # Host-to-container port mappings.
 # You can use list style (recommended) or a single space-separated string.
 ports:
