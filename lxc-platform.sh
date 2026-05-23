@@ -1638,7 +1638,7 @@ EOF
 }
 
 doctor() {
-  local prefix
+  local prefix agent_listen
 
   echo "[bridge]"
   ip addr show "$BRIDGE" || true
@@ -1664,6 +1664,26 @@ doctor() {
   echo
   echo "[sniproxy]"
   rc-service sniproxy status || true
+
+  if agent_enabled; then
+    echo
+    echo "[agent]"
+    rc-service lxc-platform-agent status || true
+    pgrep -a -f "$AGENT_BIN" || true
+
+    echo "binary: $AGENT_BIN"
+    [ -x "$AGENT_BIN" ] || echo "missing binary"
+
+    echo "config: $AGENT_CONFIG"
+    [ -f "$AGENT_CONFIG" ] && sed -n '1,40p' "$AGENT_CONFIG" || echo "missing config"
+
+    echo "state: $AGENT_STATE_FILE"
+    [ -f "$AGENT_STATE_FILE" ] && ls -lh "$AGENT_STATE_FILE" || echo "state file not found yet"
+
+    agent_listen="${AGENT_LISTEN_ADDR:-:9108}"
+    echo "listen: $agent_listen"
+    ss -lntp 2>/dev/null | grep -F "${agent_listen##*:}" || true
+  fi
 
   echo
   echo "[lxc]"
